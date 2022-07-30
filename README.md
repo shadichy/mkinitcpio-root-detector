@@ -1,0 +1,1 @@
+# mkinitcpio-root-detector
