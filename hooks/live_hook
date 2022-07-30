@@ -36,42 +36,54 @@ live_mount(){
     i=0
     while [ "$i" -le 5 ]; do
         i=`expr $i + 1`
-        if [ "$cdrom_mounted" -ne 1 ] && ! timeout 10 mount ${devfstype:-auto} -o ${rwopt:-ro}${devflags:+,$devflags} $dev /cdrom; then
+        
+        # Mount the device containing the live filesystem
+        if [ "$cdrom_mounted" -ne 1 ] && ! timeout 10 mount ${devfstype:-auto} -o ${rwopt:-ro}${devflags:+,$devflags} $dev /cdrom &>/dev/null; then
             call_err "Failed to mount $dev on /cdrom! Did you label the disk?"
             continue
         fi
         cdrom_mounted=1
+
+        # Mount the real root filesystem
         [ -z "$rootfstype" ] && rootfstype="squashfs"
-        if [ "$sfsroot_mounted" -ne 1 ] && ! timeout 10 mount -t ${rootfstype:-auto} -o ro${rootflags:+,$rootflags} ${root:-"/cdrom/root.sfs"} "$1"; then
+        if [ "$sfsroot_mounted" -ne 1 ] && ! timeout 10 mount -t ${rootfstype:-auto} -o ro${rootflags:+,$rootflags} ${root:-"/cdrom/root.sfs"} "$1" &>/dev/null; then
             call_err "Failed to mount $root on $1! Maybe the disk image $root is missing."
             continue
         fi
         sfsroot_mounted=1
-        if [ "$data_mounted" -ne 1 ] && ! timeout 10 mount -t ${datafstype:-auto} ${dataflags:+-o $dataflags} ${data:-"/cdrom/data.img"} /data;then
+
+        # Mount the data filesystem
+        if [ "$data_mounted" -ne 1 ] && ! timeout 10 mount -t ${datafstype:-auto} ${dataflags:+-o $dataflags} ${data:-"/cdrom/data.img"} /data &>/dev/null;then
             call_err "Failed to mount $data on /data! Maybe the disk image $data is missing."
             continue
         fi
         data_mounted=1
+
+        # Mount the device for overlay filesystem
         if [ ! -z "$overlay" ]; then
-            if [ "$overlay_mounted" -ne 1 ] && ! timeout 10 mount -t ${overlayfstype:-auto} ${overlayflags:+-o $overlayflags} "$overlay" /overlay;then
+            if [ "$overlay_mounted" -ne 1 ] && ! timeout 10 mount -t ${overlayfstype:-auto} ${overlayflags:+-o $overlayflags} "$overlay" /overlay &>/dev/null;then
                 call_err "Failed to mount $overlay on /overlay!"
                 continue
             fi
             overlay_mounted=1
             [ ! -d /overlay/rw ] && mkdir /overlay/rw
             [ ! -d /overlay/wk ] && mkdir /overlay/wk
-            if [ "$overlay_chrooted" -ne 1 ] && ! mount -t overlay overlay -o lowerdir=$1:/data,upperdir=/overlay/rw,workdir=/overlay/wk "$1"; then
+            if [ "$overlay_chrooted" -ne 1 ] && ! mount -t overlay overlay -o lowerdir=$1:/data,upperdir=/overlay/rw,workdir=/overlay/wk "$1" &>/dev/null; then
                 call_err "Failed to mount overlay filesystem!"
                 continue
             fi
             overlay_chrooted=1
         else
-            mount --bind /data/var "$1"/var
+            mount --bind /data/var "$1"/var &>/dev/null
         fi
-        mount --bind /cdrom "$1"/cdrom
+
+        # Bind
+        mount --bind /cdrom "$1"/cdrom &>/dev/null
         finerr=1
         break
     done
+
+    # Error handling
     if [ $finerr -eq 0 ]; then
         echo "You are now being dropped into an emergency shell."
         launch_interactive_shell
@@ -119,12 +131,8 @@ run_hook() {
                 fi
             done
         done
-        if [ "$found_dev" -eq 1 ]; then
-            echo "Found root partition: $dev"
-            echo "Found data partition: $data"
-            live_mount "$dev"
-        else
-            echo "No dev found!"
+        if [ "$found_dev" -eq 0 ]; then
+            echo "No root device found!"
             launch_interactive_shell
         fi
         export mount_handler="live_mount"
