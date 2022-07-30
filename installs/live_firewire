@@ -1,0 +1,10 @@
+#!/bin/bash
+
+build(){
+  map add_module firewire-sbp2?
+  # firewire
+  add_checked_modules '/drivers/firewire/'
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
+

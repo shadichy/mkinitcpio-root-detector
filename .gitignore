@@ -1,0 +1,4 @@
+/mkinitcpio-root-detector
+/pkg
+/src
+*.pkg.tar.zst
