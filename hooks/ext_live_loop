@@ -1,45 +1,29 @@
 #!/usr/bin/ash
 
 extos_loop_mount_handler() {
-    local found_dev=0 i=0
-    while [ "$rootfs_dev" = "" ] ; do
+    local i=0
+    while [ ! "$rootfs_dev" ] && [ "$i" -lt 5 ] ; do
         i=`expr $i + 1`
-        if [ "$i" -ge 5 ]; then
-            msg "No root device found!"
-            launch_interactive_shell
-        fi
-            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -vram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
-        for part in $list
-        do
+        list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -vram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+        for part in $list; do
             sleep 0.1
             msg "Looking for: $part"
-            if p_has "$part" "${loop_img}"; then
-                rootfs_dev=$part
-                found_dev=1
-            fi
+            _p_has "$part" "${loop_img}" && rootfs_dev=$part
         done
     done
-    if [ "$found_dev" -eq 0 ] && [ "$rootfs_dev" = "" ]; then
-        msg "Device contains $loop_img not found!"
-        launch_interactive_shell
-    fi
-    i=0
-    local iso_mntd=0
-    while [ "$i" -lt 5 ]; do
-        i=`expr $i + 1`
-        # Mount the device containing the loop disk image
-            if [ "$iso_mntd" -ne 1 ] && ! timeout 10 mount -t ${rdevfstype:-auto} -o {rwopt:-ro}${rdevflags:+,$rdevflags} $rootfs_dev /iso &>/dev/null; then
-            call_err "Failed to mount $rootfs_dev on /iso! Retrying..."
-            continue
-        fi
-        iso_mntd=1
-        export rootfs_dev="/iso/$loop_img"
-        extos_mount_handler $1
-    done
+    [ "$rootfs_dev" ] || _call_err "Device contains $loop_img not found!"
+
+    # Mount the device containing the loop disk image
+    local loopfs="/run/extos/loop"
+    _mount_dev "$loop_img" "$loopfs" "-t ${loopfstype:-auto}" "${loopflags:-defaults}" || _call_err "Failed to mount '${loop_img}' on '${loopfs}'! Wrong fs type or corrupted device!"
+
+    export rootfs_dev="$loopfs/$loop_img"
+    export data="tmpfs"
+    extos_mount_handler $1
 }
 
 run_hook() {
     if [ "$loop_img" ]; then
-        export mountt_handler="extos_loop_mount_handler"
+        export mount_handler="extos_loop_mount_handler"
     fi
 }

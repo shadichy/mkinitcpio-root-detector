@@ -1,140 +1,143 @@
 #!/usr/bin/ash
 
-call_err() {
-    msg "$1"
-    msg "Trying to remount..."
-    sleep 5
+live_profile() {
+    driver=${driver:-prop}
+    lang=${lang:-en_US}
+    keytable=${keytable:-us}
+    tz=${tz:-"Etc/UTC"}
 }
 
-p_has(){
+_call_err() {
+    echo "ERROR: $1"
+    echo "   Falling back to interactive prompt"
+    echo "   You can try to fix the problem manually, log out when you are finished"
+    launch_interactive_shell
+}
+
+_p_has(){
     disktmp=$(mktemp)
     rm -f $disktmp
     mkdir -p $disktmp || true
-    timeout 10 mount -t auto "$1" $disktmp &>/dev/null
+    timeout 10 mount -t auto "$1" $disktmp
     [ -f "$disktmp/$2" ] && [ -b "$1" ]
     status=$?
-    umount -lf $disktmp 2>/dev/null
+    umount -lf $disktmp
     return $status
 }
 
-getdev(){
+_getdev(){
     [ "$1" ] && (resolve_device "$1" || printf $1) || printf "$2"
+}
+
+_mount_dev() {
+    local dev="${1}" mnt="${2}" flg="${3}" opts="${4}"
+
+    mkdir -p "${mnt}"
+
+    msg ":: Mounting '${dev}' to '${mnt}'"
+
+    [[ "${dev}" = "/dev/"* ]] && while ! poll_device "${dev}" 30; do
+        _call_err "'${dev}' device did not show up after 30 seconds..."
+    done
+
+    timeout 10 mount -o "${opts}" "${flg}" "${dev}" "${mnt}"
+    return $?
 }
 
 extos_mount_handler() {
     [ "$rootfs_dev" ] && rootfs_dev=$(resolve_device "$rootfs_dev" || printf $rootfs_dev)
-    root=$(getdev $root "/rootfs.sfs")
-    data=$(getdev $data "/data.img")
-    pkgd=$(getdev $pkgd "/packages")
+    root=$(_getdev $root "/rootfs.sfs")
+    data=$(_getdev $data "/data.img")
+    pkgd=$(_getdev $pkgd "/pkgs")
 
-    mkdir /cdrom /data /packages /pkgmnpt
-    local cdrom_mntd=0 sfsroot_mntd=0 data_mntd=0 pkgd_mntd=0 finerr=1
+    local cdrom_mntd pkgd_mntd
 
-    if [ -b "$root" ] && ([ -b "$data" ] || [ "$data" = "tmpfs" ]); then
-        cdrom_mntd=1
-    else
-        local found_dev=0 i=0
-        while [ "$rootfs_dev" = "" ] ; do
+    [[ "$root" = "/dev/"* ]] && local r_blk=y
+    [[ "$data" = "/dev/"* ]] || [ "$data" = "tmpfs" ] || [ "$data" = "ramfs" ] && local d_blk=y
+    [[ "$pkgd" = "/dev/"* ]] && local p_blk=y
+
+    if ! ([ r_blk ] && [ d_blk ] && [ p_blk ]); then
+        local i=0
+        while [ ! "$rootfs_dev" ] && [ "$i" -lt 5 ] ; do
+            [ r_blk ] && [ d_blk ] && [ p_blk ] && break
             i=`expr $i + 1`
-            if [ "$i" -ge 5 ]; then
-                msg "No root device found!"
-                launch_interactive_shell
-            fi
-            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -v ram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
-            for part in $list
-            do
+            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -vram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+            for part in $list; do
                 sleep 0.1
                 msg "Looking for: $part"
-                if p_has "$part" "${root}"; then
-                    rootfs_dev=$part
-                    found_dev=1
+                local left
+                if [ ! r_blk ]; then
+                    left=$root
+                elif [ ! d_blk ]; then
+                    left=$data
+                elif [ ! p_blk ]; then
+                    left=$pkgd
                 fi
-                p_has "$part" "/.extos-rootfsver" && root=$part
-                p_has "$part" "/.extos-profile" && data=$part
+                [ "$left" ] && _p_has "$part" "${left}" && rootfs_dev=$part
+                unset left
+                [ "$r_blk" ] || (_p_has "$part" "/.extos-rootfsver" && root=$part)
+                [ "$d_blk" ] || (_p_has "$part" "/.extos-profile" && data=$part)
+                [ "$p_blk" ] || (_p_has "$part" "/.extos-pkgls" && pkgd=$part)
             done
         done
-        if [ -b "$root" ]; then
-            if [ -b "$data" ] || [ "$data" = "" ]; then
-                [ "$data" = "" ] && data="tmpfs"
-                cdrom_mntd=1
-                rootfs_dev=""
-            fi
-            found_dev=1
+        unset i
+        [ "$rootfs_dev" ] && cdrom_mntd=y || [ r_blk ] || _call_err "No rootfs device found!"
+    fi
+
+    # Mount the device containing the filesystem
+    local cdrom="/run/extos/cdrom"
+    [ "$cdrom_mntd" ] && _mount_dev "$rootfs_dev" "$cdrom" "-t ${rdevfstype:-auto}" "${rwopt:-ro},${rdevflags:-defaults}" || _call_err "Failed to mount '${rootfs_dev}' on '${cdrom}'! Wrong fs type or corrupted device!"
+
+    # Mount the real root filesystem
+    local rootfs="/run/extos/rootfs" 
+    local rp="$([ "$r_blk" ] || printf "$cdrom/")${root}"
+    _mount_dev "${rp}" "$rootfs" "$([ -d $rp ] && printf "--bind" || printf "-t ${rootfstype:-auto}")" "${rootflags:-defaults}" || _call_err "Failed to mount '${root}' on '${rootfs}'! Wrong fs type or corrupted device!"
+
+    # Mount the data filesystem
+    local datafs="/run/extos/data"
+    local fallback=y
+    if [ "$d_blk" ] || [ -f "$cdrom/$data" ]; then
+        local dp="$([ "$d_blk" ] || printf "$cdrom/")${data}"
+        _mount_dev "${dp}" "$datafs" "$([ -d $dp ] && printf "--bind" || printf "-t ${datafstype:-auto}")" "${dataflags:-defaults}" && unset fallback
+    fi
+    if [ "$fallback" ]; then
+        if [ "$data" != "tmpfs" ] && [ "$data" != "ramfs" ] && [ "$data" ]; then
+            echo "ERROR: $data device not found, wrong fs type or corrupted device!"
+            echo "Falling back to default profile..."
+            data=""
         fi
-        if [ "$found_dev" -eq 0 ] && [ "$rootfs_dev" = "" ]; then
-            msg "No root device found!"
-            launch_interactive_shell
+        [ "$data" ] || data="tmpfs"
+        timeout 10 mount -t $data $data $datafs || _call_err "Failed to set default profile!"
+    fi
+
+    # Mount packages
+    local pkgargs=""
+    local pkgfs="/run/extos/pkgs"
+    local pkgdir="/run/extos/packages"
+    if [ "$p_blk" ] || [ -f "$cdrom/$pkgs" ]; then
+        local pp="$([ "$p_blk" ] || printf "$cdrom/")${pkgd}"
+        if _mount_dev "${pp}" "$pkgfs" "$([ -d $pp ] && printf "--bind" || printf "-t ${pkgdfstype:-auto}")" "${pkgdflags:-defaults}"; then
+            for p in ${pkgfs}/* ${pkgfs}/.[^.]*; do
+                [ "$p" = "${pkgfs}/.[^.]*" ] && continue
+                local pdir="${pkgdir}/${p:8}"
+                mkdir -p $pdir
+                _mount_dev "${p}" "${pdir}" "$([ -d $p ] && printf "--bind" || printf "-t auto")" "defaults" && pkgargs+=":${pdir}"
+                unset pdir
+            done
+            pkgd_mntd=y
+        else
+            echo "ERROR: $pkgd device not found, wrong fs type or corrupted device!"
+            msg "Continue to boot with all packages disabled..."
         fi
     fi
 
-    i=0
-    while [ "$i" -lt 5 ]; do
-        i=`expr $i + 1`
-        
-        # Mount the device containing the live filesystem
-        if [ "$cdrom_mntd" -ne 1 ] && ! timeout 10 mount -t ${rdevfstype:-auto} -o ${rwopt:-ro}${rdevflags:+,$rdevflags} $rootfs_dev /cdrom &>/dev/null; then
-            call_err "Failed to mount $rootfs_dev on /cdrom! Retrying..."
-            continue
-        fi
-        cdrom_mntd=1
-
-        # Mount the real root filesystem
-        local rootpath="$([ -b "$root" ] || printf '/cdrom/')${root}" root_fs="-t ${rootfstype:-auto}"
-        [ -d $rootpath ] && root_fs="--bind"
-        if [ "$sfsroot_mntd" -ne 1 ] && ! timeout 10 mount ${root_fs} ${rootflags:+-o ro,$rootflags} ${rootpath} "$1" &>/dev/null; then
-            call_err "Failed to mount $root on $1! Maybe the device $root is missing or corrupted."
-            continue
-        fi
-        sfsroot_mntd=1
-
-        # Mount the data filesystem
-        [ "$data" = "tmpfs" ] && datafstype="tmpfs"
-        local datapath="$([ -b "$data" ] || printf '/cdrom/')${data}" data_fs="-t ${datafstype:-auto}"
-        [ -d $datapath ] && data_fs="--bind"
-        if [ "$data_mntd" -ne 1 ] && ! timeout 10 mount ${data_fs} ${dataflags:+-o $dataflags} ${datapath} /data &>/dev/null;then
-            call_err "Failed to mount $data on /data! Maybe the device $data is missing or corrupted."
-            msg "Falling back to default profile..."
-            timeout 10 mount -t tmpfs tmpfs /data &>/dev/null || continue
-            profile="blank"
-        fi
-        data_mntd=1
-
-        # Mount packages
-        local pkgargs=""
-        if [ "$rootfs_dev" != "" ] || [ "$pkgd" != "" ]; then
-            local pkgpath="$([ -b "$pkgd" ] || printf '/cdrom/')${pkgd}" pkgd_fs="-t ${pkgdfstype:-auto}"
-            [ -d $pkgpath ] && pkgd_fs="--bind"
-            if [ "$pkgd_mntd" -ne 1 ] && ! timeout 10 mount ${pkgd_fs} ${pkgdflags:+-o $pkgdflags} $pkgpath /pkgmnpt &>/dev/null;then
-                call_err "Failed to mount $pkgd on /pkgmnpt! Maybe the device $pkgd is missing or corrupted."
-                msg "Continue to boot with all packages disabled..."
-            else
-                pkgd_mntd=1
-                for p in /pkgmnpt/* pkgmnpt/.[^.]*; do
-                    [ "$p" = "pkgmnpt/.[^.]*" ] && continue
-                    local pdir="/packages/${p:8}"
-                    mkdir $pdir
-                    local pkg_fs="-t auto"
-                    [ -d $p ] && pkg_fs="--bind"
-                    timeout 10 mount ${pkgd_fs} -o ro ${p} ${pdir} && pkgargs+=":${pdir}"
-                done
-            fi
-        fi
-
-        mount -t overlay overlay -o lowerdir=$1${pkgargs},upperdir=/data,workdir=/tmp "$1"
-        
-        # Bind
-        [ "rootfs_dev" = "" ] || mount --bind /cdrom "$1"/cdrom &>/dev/null
-        [ "$pkgd_mntd" -eq 1 ] && mount --bind /packages "$1"/packages &>/dev/null
-        finerr=1
-        break
-    done
-
-    # Error handling
-    if [ $finerr -eq 0 ]; then
-        echo "You are now being dropped into an emergency shell."
-        launch_interactive_shell
-        msg "Trying to continue (this will most likely fail) ..."
-    fi
+    local wkfs=/run/extos/work
+    mkdir -p $wkfs
+    mount -t overlay overlay -o lowerdir=${rootfs}${pkgargs},upperdir=${datafs},workdir=${wkfs} "$1"
+    
+    # Bind
+    [ "$cdrom_mntd" ] && mount --bind "$cdrom" "$1"/cdrom
+    [ "$pkgd_mntd" ] && mount --bind "$pkgdir" "$1"/packages
 
 }
 
@@ -148,8 +151,4 @@ run_hook() {
         sleep 0.3
     fi
     export mount_handler="extos_mount_handler"
-}
-
-run_latehook(){
-    echo "late hooks"
 }
