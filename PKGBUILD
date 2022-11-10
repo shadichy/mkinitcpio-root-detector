@@ -5,7 +5,7 @@ pkgdesc="Live boot and root detector hooks for mkinitcpio."
 arch=("any")
 url="https://github.com/shadichy/mkinitcpio-root-detector"
 license=('GPL')
-depends=("mkinitcpio")
+depends=("mkinitcpio" "mkinitcpio-nfs-utils" "nbd")
 source=("git+$url.git")
 md5sums=(SKIP)
 
