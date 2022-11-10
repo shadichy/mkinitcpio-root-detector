@@ -35,12 +35,11 @@ _mount_dev() {
     mkdir -p "${mnt}"
 
     msg ":: Mounting '${dev}' to '${mnt}'"
-
-    [[ "${dev}" = "/dev/"* ]] && while ! poll_device "${dev}" 30; do
+    [ "${dev%%'/dev/'*}" ] || while ! poll_device "${dev}" 30; do
         _call_err "'${dev}' device did not show up after 30 seconds..."
     done
 
-    timeout 10 mount -o "${opts}" "${flg}" "${dev}" "${mnt}"
+    timeout 10 mount -o ${opts} ${flg} "${dev}" "${mnt}"
     return $?
 }
 
@@ -52,36 +51,36 @@ extos_mount_handler() {
 
     local cdrom_mntd pkgd_mntd
 
-    [[ "$root" = "/dev/"* ]] && local r_blk=y
-    [[ "$data" = "/dev/"* ]] || [ "$data" = "tmpfs" ] || [ "$data" = "ramfs" ] && local d_blk=y
-    [[ "$pkgd" = "/dev/"* ]] && local p_blk=y
+    [ "${root%%'/dev/'*}" ] || local r_blk=y
+    [ -z "${data%%'/dev/'*}" ] || [ "$data" = "tmpfs" ] || [ "$data" = "ramfs" ] && local d_blk=y
+    [ "${pkgd%%'/dev/'*}" ] || local p_blk=y
 
-    if ! ([ r_blk ] && [ d_blk ] && [ p_blk ]); then
+    if ! ([ "$r_blk" ] && [ "$d_blk" ] && [ "$p_blk" ]); then
         local i=0
-        while [ ! "$rootfs_dev" ] && [ "$i" -lt 5 ] ; do
-            [ r_blk ] && [ d_blk ] && [ p_blk ] && break
+        while [ -z "$rootfs_dev" ] && [ "$i" -le 5 ] ; do
+            [ "$r_blk" ] && [ "$d_blk" ] && [ "$p_blk" ] && break
             i=`expr $i + 1`
-            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -vram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -v ram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
             for part in $list; do
                 sleep 0.1
                 msg "Looking for: $part"
                 local left
-                if [ ! r_blk ]; then
+                if [ ! "$r_blk" ]; then
                     left=$root
-                elif [ ! d_blk ]; then
+                elif [ ! "$d_blk" ]; then
                     left=$data
-                elif [ ! p_blk ]; then
+                elif [ ! "$p_blk" ]; then
                     left=$pkgd
                 fi
                 [ "$left" ] && _p_has "$part" "${left}" && rootfs_dev=$part
                 unset left
                 [ "$r_blk" ] || (_p_has "$part" "/.extos-rootfsver" && root=$part)
-                [ "$d_blk" ] || (_p_has "$part" "/.extos-profile" && data=$part)
+                [ "$d_blk" ] || (_p_has "$part" "/data/.extos-profile" && data=$part)
                 [ "$p_blk" ] || (_p_has "$part" "/.extos-pkgls" && pkgd=$part)
             done
         done
         unset i
-        [ "$rootfs_dev" ] && cdrom_mntd=y || [ r_blk ] || _call_err "No rootfs device found!"
+        [ "$rootfs_dev" ] && cdrom_mntd=y || [ "$r_blk" ] || _call_err "No rootfs device found!"
     fi
 
     # Mount the device containing the filesystem
@@ -107,21 +106,24 @@ extos_mount_handler() {
             data=""
         fi
         [ "$data" ] || data="tmpfs"
+        [ -d "$datafs" ] || mkdir -p "$datafs"
         timeout 10 mount -t $data $data $datafs || _call_err "Failed to set default profile!"
+        mkdir -p "$datafs/data"
+        mkdir -p "$datafs/overlay"
     fi
 
     # Mount packages
-    local pkgargs=""
+    local pargs=""
     local pkgfs="/run/extos/pkgs"
     local pkgdir="/run/extos/packages"
-    if [ "$p_blk" ] || [ -f "$cdrom/$pkgs" ]; then
+    if [ "$p_blk" ] || [ -e "$cdrom/$pkgs" ]; then
         local pp="$([ "$p_blk" ] || printf "$cdrom/")${pkgd}"
         if _mount_dev "${pp}" "$pkgfs" "$([ -d $pp ] && printf "--bind" || printf "-t ${pkgdfstype:-auto}")" "${pkgdflags:-defaults}"; then
             for p in ${pkgfs}/* ${pkgfs}/.[^.]*; do
                 [ "$p" = "${pkgfs}/.[^.]*" ] && continue
-                local pdir="${pkgdir}/${p:8}"
+                local pdir="${pkgdir}/${p#"$pkgfs"}"
                 mkdir -p $pdir
-                _mount_dev "${p}" "${pdir}" "$([ -d $p ] && printf "--bind" || printf "-t auto")" "defaults" && pkgargs+=":${pdir}"
+                _mount_dev "${p}" "${pdir}" "$([ -d $p ] && printf "--bind" || printf "-t auto")" "defaults" && pargs="${pargs}:${pdir}"
                 unset pdir
             done
             pkgd_mntd=y
@@ -131,13 +133,11 @@ extos_mount_handler() {
         fi
     fi
 
-    local wkfs=/run/extos/work
-    mkdir -p $wkfs
-    mount -t overlay overlay -o lowerdir=${rootfs}${pkgargs},upperdir=${datafs},workdir=${wkfs} "$1"
+    mount -t overlay overlay -o lowerdir=${rootfs}${pkgargs},upperdir=${datafs}/data,workdir=${datafs}/overlay "$1"
     
     # Bind
     [ "$cdrom_mntd" ] && mount --bind "$cdrom" "$1"/cdrom
-    [ "$pkgd_mntd" ] && mount --bind "$pkgdir" "$1"/packages
+    [ "$pkgd_mntd" ] && mount --bind "$pkgfs" "$1"/packages
 
 }
 

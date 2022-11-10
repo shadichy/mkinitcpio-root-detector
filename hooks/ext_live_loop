@@ -4,7 +4,7 @@ extos_loop_mount_handler() {
     local i=0
     while [ ! "$rootfs_dev" ] && [ "$i" -lt 5 ] ; do
         i=`expr $i + 1`
-        list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -vram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+        list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -v ram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
         for part in $list; do
             sleep 0.1
             msg "Looking for: $part"
