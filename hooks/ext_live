@@ -52,7 +52,7 @@ extos_mount_handler() {
     local cdrom_mntd pkgd_mntd
 
     [ "${root%%'/dev/'*}" ] || local r_blk=y
-    [ -z "${data%%'/dev/'*}" ] || [ "$data" = "tmpfs" ] || [ "$data" = "ramfs" ] && local d_blk=y
+    [ "${data%%'/dev/'*}" ] || local d_blk=y
     [ "${pkgd%%'/dev/'*}" ] || local p_blk=y
 
     if ! ([ "$r_blk" ] && [ "$d_blk" ] && [ "$p_blk" ]); then
