@@ -1,21 +1,22 @@
 #!/usr/bin/ash
 
 extos_loop_mount_handler() {
+    [ "$loop_dev" ] || (loop_dev="$rootfs_dev" && unset $rootfs_dev)
     local i=0
-    while [ ! "$rootfs_dev" ] && [ "$i" -lt 5 ] ; do
+    while [ ! "$loop_dev" ] && [ "$i" -lt 5 ] ; do
         i=`expr $i + 1`
-        list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -v ram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+        list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -Ev "loop|ram|nbd|fd" | sed "s|^|/dev/|g")
         for part in $list; do
             sleep 0.1
             msg "Looking for: $part"
-            _p_has "$part" "${loop_img}" && rootfs_dev=$part
+            _p_has "$part" "${loop_img}" && loop_dev=$part
         done
     done
-    [ "$rootfs_dev" ] || _call_err "Device contains $loop_img not found!"
+    [ "$loop_dev" ] || _call_err "Device contains $loop_img not found!"
 
     # Mount the device containing the loop disk image
     local loopfs="/run/extos/loop"
-    _mount_dev "$loop_img" "$loopfs" "-t ${loopfstype:-auto}" "${loopflags:-defaults}" || _call_err "Failed to mount '${loop_img}' on '${loopfs}'! Wrong fs type or corrupted device!"
+    _mount_dev "$loop_dev" "$loopfs" "-t ${loopfstype:-auto}" "${loopflags:-defaults}" || _call_err "Failed to mount '${loop_dev}' on '${loopfs}'! Wrong fs type or corrupted device!"
 
     export rootfs_dev="$loopfs/$loop_img"
     export data="tmpfs"

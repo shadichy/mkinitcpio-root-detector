@@ -60,7 +60,7 @@ extos_mount_handler() {
         while [ -z "$rootfs_dev" ] && [ "$i" -le 5 ] ; do
             [ "$r_blk" ] && [ "$d_blk" ] && [ "$p_blk" ] && break
             i=`expr $i + 1`
-            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -v loop | grep -v ram | grep -v nbd | grep -v fd | sed "s|^|/dev/|g")
+            list=$(ls /sys/class/block/ | grep ".*[0-9]$" | grep -Ev "loop|ram|nbd|fd" | sed "s|^|/dev/|g")
             for part in $list; do
                 sleep 0.1
                 msg "Looking for: $part"
@@ -136,8 +136,8 @@ extos_mount_handler() {
     mount -t overlay overlay -o lowerdir=${rootfs}${pkgargs},upperdir=${datafs}/data,workdir=${datafs}/overlay "$1"
     
     # Bind
-    [ "$cdrom_mntd" ] && mount --bind "$cdrom" "$1"/cdrom
-    [ "$pkgd_mntd" ] && mount --bind "$pkgfs" "$1"/packages
+    [ "$cdrom_mntd" ] && ( [ -d "$1/cdrom" ] || mkdir "$1/cdrom" ) && mount --bind "$cdrom" "$1/cdrom"
+    [ "$pkgd_mntd" ] && ( [ -d "$1/packages"  ] || mkdir "$1/packages" ) && mount --bind "$pkgfs" "$1/packages"
 
 }
 
