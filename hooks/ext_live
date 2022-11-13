@@ -133,7 +133,7 @@ extos_mount_handler() {
         fi
     fi
 
-    mount -t overlay overlay -o lowerdir=${rootfs}${pkgargs},upperdir=${datafs}/data,workdir=${datafs}/overlay "$1"
+    mount -t overlay overlay -o lowerdir=${rootfs}${pargs},upperdir=${datafs}/data,workdir=${datafs}/overlay "$1"
     
     # Bind
     [ "$cdrom_mntd" ] && ( [ -d "$1/cdrom" ] || mkdir "$1/cdrom" ) && mount --bind "$cdrom" "$1/cdrom"
